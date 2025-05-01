@@ -54,7 +54,7 @@ if [ ! -f "/config/autolrc_config.json" ]; then\n\
 fi\n\
 \n\
 # Run the transcription script with the provided arguments\n\
-python3 /app/transcribe.py "$@"\n\
+python3 /app/main.py "$@"\n\
 ' > /app/entrypoint.sh
 
 # Make the entrypoint script executable
