@@ -34,7 +34,7 @@ RUN python3 -m demucs -d cpu test.mp3
 RUN rm -r separated
 
 # Install additional dependencies needed for the transcription script
-RUN python3 -m pip install pydub google-generativeai
+RUN python3 -m pip install pydub google-generativeai librosa
 
 # Create necessary directories
 RUN mkdir -p /data/models /config

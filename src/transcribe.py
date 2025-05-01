@@ -2,6 +2,8 @@ import os
 import json
 import shutil
 import time
+import librosa
+import librosa.onset
 import subprocess
 import sys
 import re
@@ -12,6 +14,7 @@ from pathlib import Path
 from pydub import AudioSegment
 from pydub.utils import mediainfo
 import google.generativeai as genai
+import numpy as np
 
 # Set up initial console logging
 logging.basicConfig(
@@ -121,100 +124,122 @@ def cleanup_temp_files(converted_paths=None):
         except Exception as e:
             print(f"⚠️ Failed to remove folder: {e}")
 
-async def transcribe_with_gemini_lrc(audio_path, api_key, config):
-    """Transcribe audio using Gemini API and generate LRC content directly"""
-    print("🎤 Transcribing with Gemini for LRC generation...")
+async def get_gemini_transcript(audio_path, api_key, config):
+    """Gets plain text transcript from Gemini."""
+    print("🎤 Transcribing with Gemini ...")
     max_retries = config.get("MAX_RETRIES", 3)
     retry_delay = config.get("RETRY_DELAY", 5)
     language = config.get("LANGUAGE", "English")
     
-    # Configure Gemini client
+    # Configure Gemini
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(config.get("GEMINI_MODEL", "gemini-2.0-flash-thinking"))
     
-    instructions = f"""You are a highly skilled and meticulous transcription and translation specialist, fluent in {language}. Your sole task is to transcribe spoken {language} audio into an accurate LRC (Lyrics) file format, optimized for karaoke-style display.
-
-Here's how you will operate:
-Input: You will receive an audio file containing {language} speech (singing).
-Transcription & Translation: Carefully listen to the audio and create a complete and accurate transcription of the lyrics in {language}.
-LRC Formatting: Structure the transcription into an LRC file. This requires:
-- Each line of {language} text must be preceded by a timestamp in the format [mm:ss.xx], where mm is minutes, ss is seconds, and xx is hundredths of a second.
-- The timestamp must indicate the precise moment the lyrics begin to be sung in the audio.
-- Timestamps must be sequential and in ascending order.
-- When a single sentence is broken into multiple lines for display purposes, ensure each line has its own accurate timestamp.
-- The LRC file MUST cover the entire duration of the audio; there should be no missing sections.
-- Accuracy is paramount. Listen carefully, and double-check your work to ensure the {language} transcription is error-free.
-- Output: You will ONLY provide the complete LRC file content. Do not include any introductory text, explanations, or markdown formatting. The output MUST be plain text in LRC format.
-- Consider splitting lines to keep the phrases short
-
-Important Reminders:
-Focus exclusively on transcribing the spoken {language}. Do not add interpretations, translations into other languages, or any information not directly present in the audio.
-Pay close attention to the timing of each phrase.
-Ensure complete coverage of the audio.
-Double-check for spelling errors and accurate {language} script.
-Your entire output should ONLY be the text of the LRC file.
-Begin!
-"""
-
+    instructions = f"""
+    You are a highly skilled and meticulous transcription specialist, fluent in {language}. Your sole task is to transcribe spoken {language} audio.
+    Transcription: Carefully listen to the audio and create a complete and accurate transcription of the lyrics in {language}.
+    Output: You will ONLY provide the complete plain text transcript. Do not include any introductory text, timestamps, explanations, or markdown formatting.
+    Important Reminders:
+    Focus exclusively on transcribing the spoken {language}. Do not add interpretations, translations into other languages, or any information not directly present in the audio.
+    Double-check for spelling errors and accurate {language} script.
+    Your entire output should ONLY be the plain text of the transcript.
+    Begin!
+    """
+    
     for attempt in range(max_retries):
         try:
-            # Read audio file
             with open(audio_path, "rb") as audio_file:
                 audio_data = audio_file.read()
-            
-            print(f"📡 Sending request to Gemini API (attempt {attempt+1}/{max_retries})...")
-            
-            # Generate LRC content
+                
+            # Properly await the async function
             response = await model.generate_content_async(
-                contents=[
-                    {"text": instructions},
-                    {"inline_data": {"mime_type": "audio/wav", "data": audio_data}}
-                ],
-                generation_config={
-                    "temperature": config.get("TEMPERATURE", 0.2),
-                    "top_p": config.get("TOP_P", 0.8),
-                    "top_k": config.get("TOP_K", 40),
-                    "candidate_count": config.get("CANDIDATE_COUNT", 1),
-                }
+                [
+                    instructions,
+                    {"mime_type": "audio/wav", "data": audio_data}
+                ]
             )
             
-            # Extract text from response
-            lrc_content = response.text.strip()
-            
-            if not lrc_content:
-                print("⚠️ No LRC content returned")
-                if attempt < max_retries - 1:
-                    print(f"Retrying in {retry_delay} seconds...")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                return None
-            
-            # Validate LRC format
-            if not all(re.match(r'^\[\d{2}:\d{2}\.\d{2}\]', line.strip()) 
-                      for line in lrc_content.split('\n') if line.strip()):
-                print("⚠️ Invalid LRC format in response")
-                if attempt < max_retries - 1:
-                    print(f"Retrying in {retry_delay} seconds...")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                return None
-            
-            print(f"✅ LRC content generated successfully ({len(lrc_content)} characters)")
-            return lrc_content
-            
+            if response and response.text:
+                return response.text.strip()
+                
         except Exception as e:
-            print(f"⚠️ Attempt {attempt+1} failed: {str(e)}")
+            print(f"❌ Attempt {attempt + 1} failed: {str(e)}")
             if attempt < max_retries - 1:
-                print(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-                retry_delay *= 2
+                print(f"⏳ Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)  # Use asyncio.sleep instead of time.sleep
             else:
                 print("❌ All retry attempts failed")
                 return None
     
     return None
+
+def analyze_audio_timestamps(audio_path):
+    """Analyze audio file to generate timestamps using librosa."""
+    try:
+        # Load audio file
+        y, sr = librosa.load(audio_path)
+        
+        # Get onset strength
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+        
+        # Detect onset times
+        onset_frames = librosa.onset.onset_detect(
+            onset_envelope=onset_env,
+            sr=sr,
+            wait=0.1,  # Minimum time between onsets
+            pre_avg=0.1,  # Pre-averaging window
+            post_avg=0.1,  # Post-averaging window
+            pre_max=0.1,  # Pre-maximum window
+            post_max=0.1   # Post-maximum window
+        )
+        
+        # Convert frames to timestamps
+        timestamps = librosa.frames_to_time(onset_frames, sr=sr)
+        print(f"Generated {len(timestamps)} timestamps")
+        
+        return timestamps
+        
+    except Exception as e:
+        print(f"Error during audio analysis: {e}")
+        return None
+
+def create_lrc_content(transcript, timestamps):
+    """Create LRC content by matching transcript lines with timestamps."""
+    lrc_lines = []
+    transcript_lines = [line.strip() for line in transcript.splitlines() if line.strip()]
+    
+    # If we have fewer timestamps than lines, we'll need to interpolate
+    if len(timestamps) < len(transcript_lines):
+        # Create evenly spaced timestamps
+        total_duration = float(timestamps[-1]) if len(timestamps) > 0 else 0
+        timestamps = np.linspace(0, total_duration, len(transcript_lines))
+    
+    # Match each line with a timestamp
+    for i, line in enumerate(transcript_lines):
+        if i < len(timestamps):
+            timestamp = float(timestamps[i])
+            minutes = int(timestamp / 60)
+            seconds = int(timestamp % 60)
+            milliseconds = int((timestamp * 100) % 100)
+            lrc_line = f"[{minutes:02}:{seconds:02}.{milliseconds:02}] {line}"
+            lrc_lines.append(lrc_line)
+    
+    return "\n".join(lrc_lines)
+
+async def transcribe_and_timestamp(audio_path, api_key, config):
+    """Transcribe audio and generate LRC with accurate timestamps."""
+    # Get plain text transcript
+    transcript = await get_gemini_transcript(audio_path, api_key, config)
+    if not transcript:
+        return None
+    
+    # Analyze audio for timestamps
+    timestamps = analyze_audio_timestamps(audio_path)
+    if timestamps is None or len(timestamps) == 0:
+        return None
+    
+    # Create LRC content
+    return create_lrc_content(transcript, timestamps)
 
 def sanitize_filename(filename):
     """Create a safe version of the filename with only ASCII characters"""
@@ -340,6 +365,7 @@ async def process_audio_file_async(file_path, api_key, output_dir, config):
         
         # Extract and prepare vocals if requested
         if config.get("USE_VOCAL_ISOLATION", True):
+            # Run vocal isolation synchronously since it's a local process
             vocals_path = isolate_vocals(file_path)
             if vocals_path:
                 audio_path = vocals_path
@@ -365,8 +391,8 @@ async def process_audio_file_async(file_path, api_key, output_dir, config):
         # Generate base name for output files
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         
-        # Generate LRC content directly
-        lrc_content = await transcribe_with_gemini_lrc(converted_path, api_key, config)
+        # Generate LRC content
+        lrc_content = await transcribe_and_timestamp(converted_path, api_key, config)
         if not lrc_content:
             logging.error("❌ LRC generation failed")
             cleanup_temp_files(temp_files)
