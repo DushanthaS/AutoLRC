@@ -5,7 +5,6 @@ import time
 import subprocess
 import sys
 import re
-import argparse
 import logging
 import asyncio
 from datetime import datetime
@@ -21,7 +20,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-
 # ========================
 # Configuration
 # ========================
@@ -33,9 +31,8 @@ DEFAULT_LOGS_PATH = "/app/logs"
 # Default configuration values
 DEFAULT_CONFIG = {
     "GEMINI_API_KEY": "",
-    "GEMINI_MODEL": "gemini-2.0-flash",
-    "GAP_THRESHOLD": 0.2,  # Gap threshold for LRC lines (seconds)
-    "MAX_WORDS_PER_LINE": 7,
+    "GEMINI_MODEL": "gemini-2.0-flash-thinking",
+    "LANGUAGE": "English",  # Default language for transcription
     "TEMPERATURE": 0.2,
     "TOP_P": 0.8,
     "TOP_K": 40,
@@ -43,17 +40,13 @@ DEFAULT_CONFIG = {
     "MAX_RETRIES": 3,
     "RETRY_DELAY": 5,
     "USE_VOCAL_ISOLATION": True,
-    "CREATE_LRC": True,
-    "CREATE_TXT": True
+    "CREATE_TXT": False  # Default to not creating text files
 }
 
 # Define consistent temp folder names
 DEMUCS_OUTPUT_FOLDER = "/tmp/demucs_output"
 TEMP_DIR = "/tmp/temp_audio"
 
-# ========================
-# Utility Functions
-# ========================
 def load_config():
     """Load configuration from JSON file with defaults"""
     if os.path.exists(CONFIG_PATH):
@@ -81,13 +74,6 @@ def load_config():
         print(f"⚠️ Error creating config file: {e}")
         return DEFAULT_CONFIG
 
-
-def format_lrc_time(seconds):
-    """Format time in LRC format: [mm:ss.xx]"""
-    minutes = int(seconds // 60)
-    secs = seconds % 60
-    return f"[{minutes:02}:{secs:05.2f}]"
-
 def get_audio_duration(path):
     """Get the duration of an audio file in seconds"""
     try:
@@ -96,7 +82,139 @@ def get_audio_duration(path):
         print(f"❌ Failed to get audio duration: {e}")
         return 0.0
 
+def convert_to_wav(input_path):
+    """Convert audio to 16kHz mono WAV format for API compatibility"""
+    print("🔄 Converting to API-compatible WAV format...")
+    try:
+        audio = AudioSegment.from_file(input_path)
+        audio = audio.set_frame_rate(16000).set_channels(1)
+        output_path = os.path.join(TEMP_DIR, os.path.splitext(os.path.basename(input_path))[0] + "_converted.wav")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        audio.export(output_path, format="wav", parameters=["-ac", "1", "-ar", "16000"])
+        return output_path
+    except Exception as e:
+        print(f"❌ Conversion failed: {e}")
+        return None
 
+def cleanup_temp_files(converted_paths=None):
+    """Clean up temporary files and folders"""
+    if converted_paths:
+        for path in converted_paths:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                    print(f"✅ Removed temporary file: {path}")
+                except Exception as e:
+                    print(f"⚠️ Failed to remove file: {e}")
+    
+    if os.path.exists(TEMP_DIR):
+        try:
+            shutil.rmtree(TEMP_DIR)
+            print(f"✅ Removed temp directory: {TEMP_DIR}")
+        except Exception as e:
+            print(f"⚠️ Failed to remove folder: {e}")
+    
+    if os.path.exists(DEMUCS_OUTPUT_FOLDER):
+        try:
+            shutil.rmtree(DEMUCS_OUTPUT_FOLDER)
+            print(f"✅ Removed demucs output folder: {DEMUCS_OUTPUT_FOLDER}")
+        except Exception as e:
+            print(f"⚠️ Failed to remove folder: {e}")
+
+async def transcribe_with_gemini_lrc(audio_path, api_key, config):
+    """Transcribe audio using Gemini API and generate LRC content directly"""
+    print("🎤 Transcribing with Gemini for LRC generation...")
+    max_retries = config.get("MAX_RETRIES", 3)
+    retry_delay = config.get("RETRY_DELAY", 5)
+    language = config.get("LANGUAGE", "English")
+    
+    # Configure Gemini client
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(config.get("GEMINI_MODEL", "gemini-2.0-flash-thinking"))
+    
+    instructions = f"""You are a highly skilled and meticulous transcription and translation specialist, fluent in {language}. Your sole task is to transcribe spoken {language} audio into an accurate LRC (Lyrics) file format, optimized for karaoke-style display.
+
+Here's how you will operate:
+Input: You will receive an audio file containing {language} speech (singing).
+Transcription & Translation: Carefully listen to the audio and create a complete and accurate transcription of the lyrics in {language}.
+LRC Formatting: Structure the transcription into an LRC file. This requires:
+- Each line of {language} text must be preceded by a timestamp in the format [mm:ss.xx], where mm is minutes, ss is seconds, and xx is hundredths of a second.
+- The timestamp must indicate the precise moment the lyrics begin to be sung in the audio.
+- Timestamps must be sequential and in ascending order.
+- When a single sentence is broken into multiple lines for display purposes, ensure each line has its own accurate timestamp.
+- The LRC file MUST cover the entire duration of the audio; there should be no missing sections.
+- Accuracy is paramount. Listen carefully, and double-check your work to ensure the {language} transcription is error-free.
+- Output: You will ONLY provide the complete LRC file content. Do not include any introductory text, explanations, or markdown formatting. The output MUST be plain text in LRC format.
+- Consider splitting lines to keep the phrases short
+
+Important Reminders:
+Focus exclusively on transcribing the spoken {language}. Do not add interpretations, translations into other languages, or any information not directly present in the audio.
+Pay close attention to the timing of each phrase.
+Ensure complete coverage of the audio.
+Double-check for spelling errors and accurate {language} script.
+Your entire output should ONLY be the text of the LRC file.
+Begin!
+"""
+
+    for attempt in range(max_retries):
+        try:
+            # Read audio file
+            with open(audio_path, "rb") as audio_file:
+                audio_data = audio_file.read()
+            
+            print(f"📡 Sending request to Gemini API (attempt {attempt+1}/{max_retries})...")
+            
+            # Generate LRC content
+            response = await model.generate_content_async(
+                contents=[
+                    {"text": instructions},
+                    {"inline_data": {"mime_type": "audio/wav", "data": audio_data}}
+                ],
+                generation_config={
+                    "temperature": config.get("TEMPERATURE", 0.2),
+                    "top_p": config.get("TOP_P", 0.8),
+                    "top_k": config.get("TOP_K", 40),
+                    "candidate_count": config.get("CANDIDATE_COUNT", 1),
+                }
+            )
+            
+            # Extract text from response
+            lrc_content = response.text.strip()
+            
+            if not lrc_content:
+                print("⚠️ No LRC content returned")
+                if attempt < max_retries - 1:
+                    print(f"Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                return None
+            
+            # Validate LRC format
+            if not all(re.match(r'^\[\d{2}:\d{2}\.\d{2}\]', line.strip()) 
+                      for line in lrc_content.split('\n') if line.strip()):
+                print("⚠️ Invalid LRC format in response")
+                if attempt < max_retries - 1:
+                    print(f"Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                return None
+            
+            print(f"✅ LRC content generated successfully ({len(lrc_content)} characters)")
+            return lrc_content
+            
+        except Exception as e:
+            print(f"⚠️ Attempt {attempt+1} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                print("❌ All retry attempts failed")
+                return None
+    
+    return None
 
 def sanitize_filename(filename):
     """Create a safe version of the filename with only ASCII characters"""
@@ -106,9 +224,6 @@ def sanitize_filename(filename):
     safe_name = re.sub(r'_+', '_', safe_name)
     return safe_name
 
-# ========================
-# Audio Processing
-# ========================
 def isolate_vocals(input_path):
     """Run Demucs to isolate vocals"""
     print("🎵 Isolating vocals with Demucs...")
@@ -211,280 +326,6 @@ def isolate_vocals(input_path):
         # Don't delete the temp file yet as we might need it for transcription
         pass
 
-def convert_to_wav(input_path):
-    """Convert audio to 16kHz mono WAV format for API compatibility"""
-    print("🔄 Converting to API-compatible WAV format...")
-    try:
-        audio = AudioSegment.from_file(input_path)
-        audio = audio.set_frame_rate(16000).set_channels(1)
-        output_path = os.path.join(TEMP_DIR, os.path.splitext(os.path.basename(input_path))[0] + "_converted.wav")
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        audio.export(output_path, format="wav", parameters=["-ac", "1", "-ar", "16000"])
-        return output_path
-    except Exception as e:
-        print(f"❌ Conversion failed: {e}")
-        return None
-
-# ========================
-# Transcription Functions
-# ========================
-def transcribe_with_gemini(audio_path, api_key, config):
-    """Transcribe audio using Gemini API"""
-    print("🎤 Transcribing with Gemini...")
-    max_retries = config.get("MAX_RETRIES", 3)
-    retry_delay = config.get("RETRY_DELAY", 5)
-    
-    # Configure Gemini client
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(config.get("GEMINI_MODEL", "gemini-2.0-flash"))
-    
-    for attempt in range(max_retries):
-        try:
-            # Read audio file and prepare content for transcription
-            with open(audio_path, "rb") as audio_file:
-                audio_data = audio_file.read()
-            
-            print(f"📡 Sending request to Gemini API (attempt {attempt+1}/{max_retries})...")
-            
-            # Create content parts
-            prompt = "Transcribe this Sinhala audio with punctuation. Return only the transcription text, nothing else."
-            
-            # Make API call with configurable parameters
-            response = model.generate_content(
-                contents=[
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": "audio/wav", "data": audio_data}}
-                ],
-                generation_config={
-                    "temperature": config.get("TEMPERATURE", 0.2),
-                    "top_p": config.get("TOP_P", 0.8),
-                    "top_k": config.get("TOP_K", 40),
-                    "candidate_count": config.get("CANDIDATE_COUNT", 1),
-                }
-            )
-            
-            # Extract text from response
-            text = response.text
-            
-            if not text:
-                print("⚠️ No transcription returned")
-                if attempt < max_retries - 1:
-                    print(f"Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                return None
-            
-            print(f"✅ Transcription successful ({len(text)} characters)")
-            return text
-            
-        except Exception as e:
-            print(f"⚠️ Attempt {attempt+1} failed: {str(e)}")
-            if attempt < max_retries - 1:
-                print(f"Retrying in {retry_delay} seconds...")
-                time.sleep(retry_delay)
-                retry_delay *= 2
-            else:
-                print("❌ All retry attempts failed")
-                return None
-    
-    return None
-
-def create_timestamped_words(transcription, audio_duration):
-    """Create approximate word timings based on transcription and audio duration"""
-    if not transcription:
-        return []
-        
-    words = transcription.split()
-    avg_word_duration = audio_duration / len(words)
-    
-    return [{
-        "word": word,
-        "start": i * avg_word_duration,
-        "duration": avg_word_duration
-    } for i, word in enumerate(words)]
-
-def create_text_file(transcription, output_path):
-    """Generate plain text file from transcription"""
-    try:
-        logging.info(f"📄 Creating text file at: {output_path}")
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(transcription)
-        
-        if os.path.exists(output_path):
-            logging.info(f"✅ Text file created successfully: {output_path}")
-            logging.info(f"📊 File size: {os.path.getsize(output_path)} bytes")
-        else:
-            logging.error(f"❌ Text file was not created: {output_path}")
-    except Exception as e:
-        logging.error(f"❌ Failed to create text file: {str(e)}", exc_info=True)
-
-def create_lrc_file(timestamped_words, output_path, config):
-    """Generate LRC file from timestamped words"""
-    try:
-        logging.info(f"📝 Creating LRC file at: {output_path}")
-        
-        # Create output directory
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        logging.info(f"✅ Created output directory: {os.path.dirname(output_path)}")
-        
-        lines = []
-        current_line = []
-        current_start = 0.0
-        max_words_per_line = config.get("MAX_WORDS_PER_LINE", 7)
-
-        for i, word_data in enumerate(timestamped_words):
-            word = word_data["word"]
-            start = word_data["start"]
-            
-            if not current_line:
-                current_start = start
-                current_line.append(word)
-            else:
-                if len(current_line) >= max_words_per_line:
-                    lines.append((current_start, " ".join(current_line)))
-                    current_start = start
-                    current_line = [word]
-                else:
-                    current_line.append(word)
-
-        # Add the last line if there's anything left
-        if current_line:
-            lines.append((current_start, " ".join(current_line)))
-
-        # Write to file
-        with open(output_path, "w", encoding="utf-8") as f:
-            for start_time, line_text in lines:
-                f.write(f"{format_lrc_time(start_time)}{line_text}\n")
-        
-        if os.path.exists(output_path):
-            logging.info(f"✅ LRC file created successfully: {output_path}")
-            logging.info(f"📊 File size: {os.path.getsize(output_path)} bytes")
-            logging.info(f"📊 Number of lines: {len(lines)}")
-        else:
-            logging.error(f"❌ LRC file was not created: {output_path}")
-            
-    except Exception as e:
-        logging.error(f"❌ Failed to create LRC file: {str(e)}", exc_info=True)
-
-async def transcribe_with_gemini_lrc(audio_path, api_key, config, language="Sinhala"):
-    """Transcribe audio using Gemini API and generate LRC content directly"""
-    print("🎤 Transcribing with Gemini for LRC generation...")
-    max_retries = config.get("MAX_RETRIES", 3)
-    retry_delay = config.get("RETRY_DELAY", 5)
-    
-    # Configure Gemini client
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(config.get("GEMINI_MODEL", "gemini-2.0-flash-thinking"))
-    
-    instructions = f"""You are a highly skilled and meticulous transcription and translation specialist, fluent in {language}. Your sole task is to transcribe spoken {language} audio into an accurate LRC (Lyrics) file format, optimized for karaoke-style display.
-
-Here's how you will operate:
-Input: You will receive an audio file containing {language} speech (singing).
-Transcription & Translation: Carefully listen to the audio and create a complete and accurate transcription of the lyrics in {language}.
-LRC Formatting: Structure the transcription into an LRC file. This requires:
-- Each line of {language} text must be preceded by a timestamp in the format [mm:ss.xx], where mm is minutes, ss is seconds, and xx is hundredths of a second.
-- The timestamp must indicate the precise moment the lyrics begin to be sung in the audio.
-- Timestamps must be sequential and in ascending order.
-- When a single sentence is broken into multiple lines for display purposes, ensure each line has its own accurate timestamp.
-- The LRC file MUST cover the entire duration of the audio; there should be no missing sections.
-- Accuracy is paramount. Listen carefully, and double-check your work to ensure the {language} transcription is error-free.
-- Output: You will ONLY provide the complete LRC file content. Do not include any introductory text, explanations, or markdown formatting. The output MUST be plain text in LRC format.
-- Consider splitting lines to keep the phrases short"""
-
-    for attempt in range(max_retries):
-        try:
-            # Read audio file
-            with open(audio_path, "rb") as audio_file:
-                audio_data = audio_file.read()
-            
-            print(f"📡 Sending request to Gemini API (attempt {attempt+1}/{max_retries})...")
-            
-            # Generate LRC content
-            response = await model.generate_content_async(
-                contents=[
-                    {"text": instructions},
-                    {"inline_data": {"mime_type": "audio/wav", "data": audio_data}}
-                ],
-                generation_config={
-                    "temperature": config.get("TEMPERATURE", 0.2),
-                    "top_p": config.get("TOP_P", 0.8),
-                    "top_k": config.get("TOP_K", 40),
-                    "candidate_count": config.get("CANDIDATE_COUNT", 1),
-                }
-            )
-            
-            # Extract text from response
-            lrc_content = response.text.strip()
-            
-            if not lrc_content:
-                print("⚠️ No LRC content returned")
-                if attempt < max_retries - 1:
-                    print(f"Retrying in {retry_delay} seconds...")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                return None
-            
-            # Validate LRC format
-            if not all(re.match(r'^\[\d{2}:\d{2}\.\d{2}\]', line.strip()) 
-                      for line in lrc_content.split('\n') if line.strip()):
-                print("⚠️ Invalid LRC format in response")
-                if attempt < max_retries - 1:
-                    print(f"Retrying in {retry_delay} seconds...")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                return None
-            
-            print(f"✅ LRC content generated successfully ({len(lrc_content)} characters)")
-            return lrc_content
-            
-        except Exception as e:
-            print(f"⚠️ Attempt {attempt+1} failed: {str(e)}")
-            if attempt < max_retries - 1:
-                print(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-                retry_delay *= 2
-            else:
-                print("❌ All retry attempts failed")
-                return None
-    
-    return None
-
-# ========================
-# Main Processing Function
-# ========================
-def cleanup_temp_files(converted_paths=None):
-    """Clean up temporary files and folders"""
-    # Clean up any converted temporary files
-    if converted_paths:
-        for path in converted_paths:
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                    print(f"✅ Removed temporary file: {path}")
-                except Exception as e:
-                    print(f"⚠️ Failed to remove file: {e}")
-    
-    # Clean up temp directory
-    if os.path.exists(TEMP_DIR):
-        try:
-            shutil.rmtree(TEMP_DIR)
-            print(f"✅ Removed temp directory: {TEMP_DIR}")
-        except Exception as e:
-            print(f"⚠️ Failed to remove folder: {e}")
-    
-    # Clean up the demucs output folder (only after processing completes)
-    if os.path.exists(DEMUCS_OUTPUT_FOLDER):
-        try:
-            shutil.rmtree(DEMUCS_OUTPUT_FOLDER)
-            print(f"✅ Removed demucs output folder: {DEMUCS_OUTPUT_FOLDER}")
-        except Exception as e:
-            print(f"⚠️ Failed to remove folder: {e}")
-
 async def process_audio_file_async(file_path, api_key, output_dir, config):
     """Process a single audio file asynchronously"""
     try:
@@ -510,7 +351,7 @@ async def process_audio_file_async(file_path, api_key, output_dir, config):
         else:
             audio_path = file_path
             logging.info("ℹ️ Skipping vocal isolation as per configuration")
-            
+        
         # Convert to proper format for API
         converted_path = convert_to_wav(audio_path)
         if not converted_path:
@@ -547,8 +388,12 @@ async def process_audio_file_async(file_path, api_key, output_dir, config):
             # Extract text from LRC content by removing timestamps
             text_content = re.sub(r'\[\d{2}:\d{2}\.\d{2}\]', '', lrc_content).strip()
             text_path = os.path.join(output_dir, f"{base_name}.txt")
-            create_text_file(text_content, text_path)
-            logging.info(f"✅ Created text file: {text_path}")
+            try:
+                with open(text_path, "w", encoding="utf-8") as f:
+                    f.write(text_content)
+                logging.info(f"✅ Created text file: {text_path}")
+            except Exception as e:
+                logging.error(f"❌ Failed to write text file: {str(e)}")
         
         # Cleanup all temporary files
         cleanup_temp_files(temp_files)
@@ -578,9 +423,6 @@ async def batch_process_async(folder_path, api_key, output_dir, config):
     logging.info(f"\n🎉 Processing complete!")
     logging.info(f"📊 Files processed successfully: {successful}/{len(audio_files)}")
 
-# ========================
-# Main Execution
-# ========================
 def setup_logging():
     """Set up logging configuration"""
     try:
