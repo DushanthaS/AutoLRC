@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  autolrc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./input:/data/input
+      - ./output:/data/output
+      - ./config:/config
+      - ./models:/data/models
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    # Uncomment the deploy section if using GPU acceleration
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: transcribe --input /data/input --output /data/output

@@ -1,0 +1,28 @@
+services:
+  autolrc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - type: bind
+        source: ${PWD}/input
+        target: /app/input
+      - type: bind
+        source: ${PWD}/output
+        target: /app/output
+      - type: bind
+        source: ${PWD}/config
+        target: /app/config
+      - type: bind
+        source: ${PWD}/logs
+        target: /app/logs
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    # Uncomment the deploy section if using GPU acceleration
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu] 

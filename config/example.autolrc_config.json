@@ -1,0 +1,15 @@
+{
+    "GEMINI_API_KEY": "",
+    "GEMINI_MODEL": "gemini-2.5-flash-preview-04-17",
+    "GAP_THRESHOLD": 0.2,
+    "MAX_WORDS_PER_LINE": 7,
+    "TEMPERATURE": 0.2,
+    "TOP_P": 0.8,
+    "TOP_K": 40,
+    "CANDIDATE_COUNT": 1,
+    "MAX_RETRIES": 3,
+    "RETRY_DELAY": 5,
+    "USE_VOCAL_ISOLATION": true,
+    "CREATE_LRC": true,
+    "CREATE_TXT": true
+} 
