@@ -7,6 +7,7 @@ import sys
 import re
 import argparse
 import logging
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from pydub import AudioSegment
@@ -368,6 +369,91 @@ def create_lrc_file(timestamped_words, output_path, config):
     except Exception as e:
         logging.error(f"❌ Failed to create LRC file: {str(e)}", exc_info=True)
 
+async def transcribe_with_gemini_lrc(audio_path, api_key, config, language="Sinhala"):
+    """Transcribe audio using Gemini API and generate LRC content directly"""
+    print("🎤 Transcribing with Gemini for LRC generation...")
+    max_retries = config.get("MAX_RETRIES", 3)
+    retry_delay = config.get("RETRY_DELAY", 5)
+    
+    # Configure Gemini client
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(config.get("GEMINI_MODEL", "gemini-2.0-flash-thinking"))
+    
+    instructions = f"""You are a highly skilled and meticulous transcription and translation specialist, fluent in {language}. Your sole task is to transcribe spoken {language} audio into an accurate LRC (Lyrics) file format, optimized for karaoke-style display.
+
+Here's how you will operate:
+Input: You will receive an audio file containing {language} speech (singing).
+Transcription & Translation: Carefully listen to the audio and create a complete and accurate transcription of the lyrics in {language}.
+LRC Formatting: Structure the transcription into an LRC file. This requires:
+- Each line of {language} text must be preceded by a timestamp in the format [mm:ss.xx], where mm is minutes, ss is seconds, and xx is hundredths of a second.
+- The timestamp must indicate the precise moment the lyrics begin to be sung in the audio.
+- Timestamps must be sequential and in ascending order.
+- When a single sentence is broken into multiple lines for display purposes, ensure each line has its own accurate timestamp.
+- The LRC file MUST cover the entire duration of the audio; there should be no missing sections.
+- Accuracy is paramount. Listen carefully, and double-check your work to ensure the {language} transcription is error-free.
+- Output: You will ONLY provide the complete LRC file content. Do not include any introductory text, explanations, or markdown formatting. The output MUST be plain text in LRC format.
+- Consider splitting lines to keep the phrases short"""
+
+    for attempt in range(max_retries):
+        try:
+            # Read audio file
+            with open(audio_path, "rb") as audio_file:
+                audio_data = audio_file.read()
+            
+            print(f"📡 Sending request to Gemini API (attempt {attempt+1}/{max_retries})...")
+            
+            # Generate LRC content
+            response = await model.generate_content_async(
+                contents=[
+                    {"text": instructions},
+                    {"inline_data": {"mime_type": "audio/wav", "data": audio_data}}
+                ],
+                generation_config={
+                    "temperature": config.get("TEMPERATURE", 0.2),
+                    "top_p": config.get("TOP_P", 0.8),
+                    "top_k": config.get("TOP_K", 40),
+                    "candidate_count": config.get("CANDIDATE_COUNT", 1),
+                }
+            )
+            
+            # Extract text from response
+            lrc_content = response.text.strip()
+            
+            if not lrc_content:
+                print("⚠️ No LRC content returned")
+                if attempt < max_retries - 1:
+                    print(f"Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                return None
+            
+            # Validate LRC format
+            if not all(re.match(r'^\[\d{2}:\d{2}\.\d{2}\]', line.strip()) 
+                      for line in lrc_content.split('\n') if line.strip()):
+                print("⚠️ Invalid LRC format in response")
+                if attempt < max_retries - 1:
+                    print(f"Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                return None
+            
+            print(f"✅ LRC content generated successfully ({len(lrc_content)} characters)")
+            return lrc_content
+            
+        except Exception as e:
+            print(f"⚠️ Attempt {attempt+1} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                print("❌ All retry attempts failed")
+                return None
+    
+    return None
+
 # ========================
 # Main Processing Function
 # ========================
@@ -399,8 +485,8 @@ def cleanup_temp_files(converted_paths=None):
         except Exception as e:
             print(f"⚠️ Failed to remove folder: {e}")
 
-def process_audio_file(file_path, api_key, output_dir, config):
-    """Process a single audio file"""
+async def process_audio_file_async(file_path, api_key, output_dir, config):
+    """Process a single audio file asynchronously"""
     try:
         logging.info(f"\n🔊 Processing: {os.path.basename(file_path)}")
         converted_path = None
@@ -435,28 +521,34 @@ def process_audio_file(file_path, api_key, output_dir, config):
         temp_files.append(converted_path)
         logging.info("✅ Audio converted to WAV format")
         
-        # Transcribe
-        transcription = transcribe_with_gemini(converted_path, api_key, config)
-        if not transcription:
-            logging.error("❌ Transcription failed")
+        # Generate base name for output files
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        
+        # Generate LRC content directly
+        lrc_content = await transcribe_with_gemini_lrc(converted_path, api_key, config)
+        if not lrc_content:
+            logging.error("❌ LRC generation failed")
+            cleanup_temp_files(temp_files)
+            return False
+            
+        # Create LRC file
+        lrc_path = os.path.join(output_dir, f"{base_name}.lrc")
+        try:
+            with open(lrc_path, "w", encoding="utf-8") as f:
+                f.write(lrc_content)
+            logging.info(f"✅ Created LRC file: {lrc_path}")
+        except Exception as e:
+            logging.error(f"❌ Failed to write LRC file: {str(e)}")
             cleanup_temp_files(temp_files)
             return False
         
-        # Generate output files
-        base_name = os.path.splitext(os.path.basename(file_path))[0]
-        
-        # Create plain text file if requested
-        if config.get("CREATE_TXT", True):
+        # Create text file only if explicitly enabled in config
+        if config.get("CREATE_TXT", False):
+            # Extract text from LRC content by removing timestamps
+            text_content = re.sub(r'\[\d{2}:\d{2}\.\d{2}\]', '', lrc_content).strip()
             text_path = os.path.join(output_dir, f"{base_name}.txt")
-            create_text_file(transcription, text_path)
+            create_text_file(text_content, text_path)
             logging.info(f"✅ Created text file: {text_path}")
-        
-        # Create LRC file if requested
-        if config.get("CREATE_LRC", True):
-            lrc_path = os.path.join(output_dir, f"{base_name}.lrc")
-            timestamped_words = create_timestamped_words(transcription, duration)
-            create_lrc_file(timestamped_words, lrc_path, config)
-            logging.info(f"✅ Created LRC file: {lrc_path}")
         
         # Cleanup all temporary files
         cleanup_temp_files(temp_files)
@@ -467,8 +559,8 @@ def process_audio_file(file_path, api_key, output_dir, config):
         logging.error(f"❌ Processing failed: {str(e)}", exc_info=True)
         return False
 
-def batch_process(folder_path, api_key, output_dir, config):
-    """Process all audio files in a folder"""
+async def batch_process_async(folder_path, api_key, output_dir, config):
+    """Process all audio files in a folder asynchronously"""
     logging.info(f"🔍 Looking for audio files in {folder_path}")
     audio_files = [f for f in os.listdir(folder_path) if f.lower().endswith((".mp3", ".wav", ".m4a", ".ogg"))]
     logging.info(f"📊 Found {len(audio_files)} audio files")
@@ -477,7 +569,7 @@ def batch_process(folder_path, api_key, output_dir, config):
     
     for file in audio_files:
         file_path = os.path.join(folder_path, file)
-        if process_audio_file(file_path, api_key, output_dir, config):
+        if await process_audio_file_async(file_path, api_key, output_dir, config):
             successful += 1
     
     # Final cleanup
@@ -511,7 +603,7 @@ def setup_logging():
         logging.error(f"❌ Failed to set up logging: {str(e)}", exc_info=True)
         return None
 
-def main():
+async def main_async():
     try:
         # Set up logging first
         log_file = setup_logging()
@@ -534,10 +626,10 @@ def main():
         # Process files
         if os.path.isdir(DEFAULT_INPUT_PATH):
             logging.info(f"Processing directory: {DEFAULT_INPUT_PATH}")
-            batch_process(DEFAULT_INPUT_PATH, api_key, DEFAULT_OUTPUT_PATH, config)
+            await batch_process_async(DEFAULT_INPUT_PATH, api_key, DEFAULT_OUTPUT_PATH, config)
         elif os.path.isfile(DEFAULT_INPUT_PATH) and DEFAULT_INPUT_PATH.lower().endswith((".mp3", ".wav", ".m4a", ".ogg")):
             logging.info(f"Processing single file: {DEFAULT_INPUT_PATH}")
-            process_audio_file(DEFAULT_INPUT_PATH, api_key, DEFAULT_OUTPUT_PATH, config)
+            await process_audio_file_async(DEFAULT_INPUT_PATH, api_key, DEFAULT_OUTPUT_PATH, config)
         else:
             logging.error(f"❌ Invalid input path: {DEFAULT_INPUT_PATH}")
             sys.exit(1)
@@ -545,6 +637,9 @@ def main():
     except Exception as e:
         logging.error(f"❌ Fatal error: {str(e)}", exc_info=True)
         sys.exit(1)
+
+def main():
+    asyncio.run(main_async())
 
 if __name__ == "__main__":
     main()
