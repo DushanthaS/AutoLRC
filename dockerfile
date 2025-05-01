@@ -41,10 +41,10 @@ RUN mkdir -p /data/models /config
 
 # Copy scripts and config
 COPY src/ /app/
-COPY config/autolrc_config.json /config/
+COPY config/ /config/
 
 # Set proper permissions
-RUN chmod 644 /config/autolrc_config.json
+# RUN chmod 644 /config/autolrc_config.json
 
 # Create and set up entrypoint script
 RUN echo '#!/bin/bash\n\
