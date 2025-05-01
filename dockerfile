@@ -44,7 +44,7 @@ COPY src/ /app/
 COPY config/ /config/
 
 # Set proper permissions
-RUN chmod 644 /config/autolrc_config.json
+# RUN chmod 644 /config/autolrc_config.json
 
 # Create and set up entrypoint script
 RUN echo '#!/bin/bash\n\
