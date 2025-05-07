@@ -1,197 +1,147 @@
 # AutoLRC
 
-
-This Docker container provides a complete environment for transcribing audio files. It combines:
-
-1. **Demucs** - For vocal isolation (optional but recommended for better transcription results)
-2. **Google Gemini 2.0** - For accurate Multi language speech-to-text transcription
-3. **Output formats** - Generates both plain text and timestamped LRC files
+AutoLRC is a powerful tool that automatically generates LRC (Lyric) files from audio files using Google's Gemini API for transcription and Wav2Vec2 for timestamp alignment.
 
 ## Features
 
-- Processes audio files in various formats (MP3, WAV, M4A, OGG)
-- Optional vocal isolation to improve transcription quality
-- Automatic conversion to API-compatible format
-- Support for batch processing of multiple files
-- Persistent configuration for API keys
-- GPU acceleration support via CUDA (when available)
-- Command-line interface with flexible options
+- 🎵 Automatic transcription of audio files using Google's Gemini API
+- ⏱️ Precise timestamp generation using Wav2Vec2 forced alignment
+- 🌍 Multilingual support for various languages
+- 🎤 Optional vocal isolation for better transcription quality
+- 📝 Multiple output formats:
+  - LRC (standard lyric format)
+  - TXT (plain text transcription)
+- 🐳 Docker support for easy deployment
+- 🔄 Batch processing of multiple audio files
+- 📊 Detailed logging and progress tracking
+
+## Supported Languages
+
+The following languages are supported for transcription and timestamping:
+
+- English (en)
+- Sinhala (si)
+- Tamil (ta)
+- Hindi (hi)
+- Spanish (es)
+- French (fr)
+- German (de)
+- Italian (it)
+- Japanese (ja)
+- Korean (ko)
+- Chinese (zh)
+- Russian (ru)
+- Portuguese (pt)
+- Dutch (nl)
+- Arabic (ar)
 
 ## Prerequisites
 
-- Docker installed on your system
-- A Google Gemini API key
+- Python 3.8 or higher
+- Docker (optional, for containerized deployment)
+- Google Gemini API key
 
-## Building the Docker Image
+## Installation
 
-```bash
-git clone https://your-repository-url/AutoLRC.git
-cd AutoLRC
-docker build -t AutoLRC .
+### Local Installation
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/AutoLRC.git
+   cd AutoLRC
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Create a `.env` file in the project root:
+   ```bash
+   # Create .env file
+   echo "GEMINI_API_KEY=your_api_key_here" > .env
+   ```
+
+### Docker Installation
+
+1. Build the Docker image:
+   ```bash
+   docker build -t autolrc .
+   ```
+
+2. Create required directories:
+   ```bash
+   mkdir -p config input output logs
+   ```
+
+3. Run the container:
+   ```bash
+   docker run --gpus all \
+     -v "$(pwd)/config:/app/config" \
+     -v "$(pwd)/input:/app/input" \
+     -v "$(pwd)/output:/app/output" \
+     -v "$(pwd)/logs:/app/logs" \
+     --env-file .env \
+     autolrc
+   ```
+
+## Configuration
+
+Create a `config.json` file in the project root with the following options:
+
+```json
+{
+    "LANGUAGE": "en",
+    "USE_VOCAL_ISOLATION": false,
+    "CREATE_LRC": true,
+    "CREATE_TXT": true,
+    "OUTPUT_PATH": "./output"
+}
 ```
+
+### Configuration Options
+
+- `LANGUAGE`: Language code for transcription (default: "en")
+- `USE_VOCAL_ISOLATION`: Enable/disable vocal isolation (default: false)
+- `CREATE_LRC`: Generate LRC files (default: true)
+- `CREATE_TXT`: Generate text files (default: true)
+- `OUTPUT_PATH`: Directory for output files (default: "./output")
 
 ## Usage
 
-### Basic Usage
+### Command Line
 
 ```bash
-docker run -v /path/to/input:/data/input \
-           -v /path/to/output:/data/output \
-           -v /path/to/config:/config \
-           AutoLRC transcribe \
-           --input /data/input \
-           --output /data/output \
-           --api-key YOUR_GEMINI_API_KEY
+python src/main.py /path/to/audio/file_or_folder
 ```
 
-### With GPU Support
-
-If you have a compatible NVIDIA GPU with the NVIDIA Container Runtime:
+### Docker
 
 ```bash
 docker run --gpus all \
-           -v /path/to/input:/data/input \
-           -v /path/to/output:/data/output \
-           -v /path/to/config:/config \
-           AutoLRC transcribe \
-           --input /data/input \
-           --output /data/output \
-           --api-key YOUR_GEMINI_API_KEY
+  -v "$(pwd)/config:/app/config" \
+  -v "$(pwd)/input:/app/input" \
+  -v "$(pwd)/output:/app/output" \
+  -v "$(pwd)/logs:/app/logs" \
+  --env-file .env \
+  autolrc /app/input/your_audio_file.mp3
 ```
 
-### All Options
+## Output Files
 
-```bash
-docker run AutoLRC help
-```
+- `.lrc`: Standard lyric file with line-level timestamps
+- `.txt`: Plain text transcription without timestamps
 
-Output:
-```
-Sinhala Audio Transcription Tool
---------------------------------
-Usage: docker run [options] AutoLRC [COMMAND]
+## Environment Variables
 
-Commands:
-  help                          Show this help message
-  transcribe [OPTIONS]          Run transcription with options
+The following environment variables can be set in the `.env` file:
 
-Transcription Options:
-  --input, -i PATH              Input folder or audio file path
-  --output, -o PATH             Output folder for transcription files
-  --txt                         Generate text files (default)
-  --no-txt                      Don't generate text files
-  --lrc                         Generate LRC files (default)
-  --no-lrc                      Don't generate LRC files
-  --vocal-isolation, -v         Use Demucs for vocal isolation (default)
-  --no-vocal-isolation          Skip vocal isolation
-  --api-key KEY                 Gemini API key (if not provided, will use key from config)
-```
+- `GEMINI_API_KEY`: Your Google Gemini API key (required)
+- `CUDA_VISIBLE_DEVICES`: GPU device selection for Wav2Vec2 (optional)
 
-## Volume Mounts
+## Contributing
 
-- `/data/input` - Mount your input audio files here
-- `/data/output` - Where transcription results will be saved
-- `/data/models` - Persistent storage for downloaded models (optional)
-- `/config` - Stores your API key and other settings
-
-## Examples
-
-### Process a Single Audio File
-
-```bash
-docker run -v /path/to/file.mp3:/data/input/file.mp3 \
-           -v /path/to/output:/data/output \
-           -v /path/to/config:/config \
-           AutoLRC transcribe \
-           --input /data/input/file.mp3 \
-           --output /data/output \
-           --api-key YOUR_GEMINI_API_KEY
-```
-
-### Process All Audio Files in a Directory (Without Vocal Isolation)
-
-```bash
-docker run -v /path/to/audio/folder:/data/input \
-           -v /path/to/output:/data/output \
-           -v /path/to/config:/config \
-           AutoLRC transcribe \
-           --input /data/input \
-           --output /data/output \
-           --no-vocal-isolation
-```
-
-### Generate Only Text Files (No LRC)
-
-```bash
-docker run -v /path/to/audio/folder:/data/input \
-           -v /path/to/output:/data/output \
-           -v /path/to/config:/config \
-           AutoLRC transcribe \
-           --input /data/input \
-           --output /data/output \
-           --no-lrc
-```
-
-## API Key Storage
-
-After providing your API key once, it will be stored in the `/config` directory. As long as you mount the same directory on subsequent runs, you won't need to provide the key again.
-
-## Notes
-
-- Vocal isolation improves transcription quality but adds processing time
-- The first run will download the required Demucs model (~1GB) which will be stored in the `/data/models` volume
-- Processing speed depends on your hardware; GPU acceleration will significantly improve Demucs performance
-- When using a mounted config directory, your API key is stored securely with restricted permissions
-
-## Troubleshooting
-
-### No Audio Files Found
-
-Make sure your audio files have the correct extensions (.mp3, .wav, .m4a, or .ogg) and are properly mounted in the container.
-
-```bash
-# List files in the input directory inside the container
-docker run -v /path/to/input:/data/input --rm AutoLRC ls -la /data/input
-```
-
-### Demucs Issues
-
-If Demucs is failing to isolate vocals:
-
-1. Try processing without vocal isolation (`--no-vocal-isolation`)
-2. Ensure your audio file is not corrupted
-3. Check that the container has enough resources (CPU/memory)
-
-### API Key Issues
-
-If you're experiencing authentication errors:
-
-```bash
-# Remove existing API key from config
-docker run -v /path/to/config:/config --rm --entrypoint bash AutoLRC -c "rm -f /config/config.json"
-
-# Then run again with a new API key
-docker run -v /path/to/input:/data/input -v /path/to/output:/data/output -v /path/to/config:/config AutoLRC transcribe --input /data/input --output /data/output --api-key YOUR_NEW_KEY
-```
-
-## Advanced Usage
-
-### Using Pre-downloaded Models
-
-To avoid downloading models on each container recreation, mount a persistent directory to `/data/models`:
-
-```bash
-docker run -v /path/to/models:/data/models ... AutoLRC transcribe ...
-```
-
-### Processing Different Languages
-
-While this tool is optimized for Sinhala, you can modify the prompt in the code to work with other languages:
-
-```bash
-# Mount the script into the container and edit it
-docker run -v /path/to/your/custom/transcribe.py:/app/transcribe.py ... AutoLRC transcribe ...
-```
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
@@ -199,6 +149,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Acknowledgments
 
-- Facebook Research for the Demucs library
-- Google for the Gemini API
-- All contributors to the open-source libraries used in this project
+- Google Gemini API for transcription
+- Facebook's Wav2Vec2 for forced alignment
+- All contributors and users of this project

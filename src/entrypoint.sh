@@ -56,4 +56,4 @@ echo "Output path: $output_path"
 echo "Other arguments: ${other_args[@]}"
 
 # Run the transcription script with all arguments
-python3 /app/transcribe.py --input "$input_path" --output "$output_path" "${other_args[@]}"
+python3 /app/main.py --input "$input_path" --output "$output_path" "${other_args[@]}"
