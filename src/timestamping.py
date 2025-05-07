@@ -28,9 +28,10 @@ def load_model_and_processor(model_path="/data/models/.torch/wav2vec2-base-960h"
         return model, processor
 
 def chunk_waveform(waveform, chunk_size_sec=20, sample_rate=16000):
-    chunk_size = chunk_size_sec * sample_rate
+    chunk_size = int(chunk_size_sec * sample_rate)  # Cast to int here
     num_chunks = (waveform.shape[1] + chunk_size - 1) // chunk_size
     return [waveform[:, i * chunk_size: (i + 1) * chunk_size] for i in range(num_chunks)]
+
 
 def analyze_audio_timestamps(audio_path, text_file_path):
     """Analyze audio and generate timestamps for text lines using a simplified approach.
