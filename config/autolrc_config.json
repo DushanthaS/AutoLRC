@@ -1,5 +1,4 @@
 {
-    "GEMINI_API_KEY": "",
     "GEMINI_MODEL": "gemini-2.0-flash",
     "GAP_THRESHOLD": 0.2,
     "MAX_WORDS_PER_LINE": 7,
@@ -13,4 +12,4 @@
     "LANGUAGE": "Sinhala",
     "CREATE_LRC": true,
     "CREATE_TXT": true
-} 
+}

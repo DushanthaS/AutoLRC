@@ -5,7 +5,7 @@ __pycache__/
 *.pyd
 *.pyw
 *.pyz
-
+.env
 /input
 /output
 /temp
@@ -22,5 +22,3 @@ __pycache__/
 
 autolrc.egg-info
 .coverage
-
-config/autolrc_config.json
