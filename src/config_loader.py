@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
     "RETRY_DELAY": 5,
     "USE_VOCAL_ISOLATION": False,
     "CREATE_TXT": False,
+    "CREATE_ELRC": True,  
     "CREATE_LRC": True
 }
 
