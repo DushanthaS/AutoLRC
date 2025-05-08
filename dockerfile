@@ -63,6 +63,7 @@ RUN python3 -m pip install \
     pydub \
     google-generativeai \
     uroman \
+    asyncio  \
     huggingface_hub
 
 # Create necessary directories

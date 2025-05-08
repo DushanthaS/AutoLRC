@@ -85,26 +85,27 @@ The following languages are supported for transcription and timestamping:
      autolrc
    ```
 
-## Configuration
+## Configuration changes
 
-Create a `config.json` file in the project root with the following options:
+ Modify the `autolrc_config.json` file in the config folder with the following options:
 
 ```json
 {
-    "LANGUAGE": "en",
+    "LANGUAGE": "si",
     "USE_VOCAL_ISOLATION": false,
     "CREATE_LRC": true,
     "CREATE_TXT": true,
     "OUTPUT_PATH": "./output"
 }
 ```
+Refer to the `config/autolrc_config_example.json` for more examples. 
 
 ### Configuration Options
 
 - `LANGUAGE`: Language code for transcription (default: "en")
 - `USE_VOCAL_ISOLATION`: Enable/disable vocal isolation (default: false)
 - `CREATE_LRC`: Generate LRC files (default: true)
-- `CREATE_TXT`: Generate text files (default: true)
+- `CREATE_TXT`: Generate text files (default: false)
 - `OUTPUT_PATH`: Directory for output files (default: "./output")
 
 ## Usage

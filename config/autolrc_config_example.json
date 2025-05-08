@@ -10,5 +10,6 @@
     "RETRY_DELAY": 5,
     "USE_VOCAL_ISOLATION": true,
     "LANGUAGE": "Sinhala",
-    "CREATE_LRC": true
+    "CREATE_LRC": true,
+    "CREATE_TXT": true
 }

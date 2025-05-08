@@ -48,8 +48,9 @@ DEFAULT_CONFIG = {
     "CANDIDATE_COUNT": 1,
     "MAX_RETRIES": 3,
     "RETRY_DELAY": 5,
-    "USE_VOCAL_ISOLATION": True,
-    "CREATE_TXT": True,
+    "USE_VOCAL_ISOLATION": False,
+    "CREATE_TXT": False,
+    "CREATE_ELRC": True,  
     "CREATE_LRC": True
 }
 
